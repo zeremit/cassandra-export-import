@@ -1,21 +1,20 @@
 package com.kharevich.commands;
 
+import au.com.bytecode.opencsv.CSVReader;
 import au.com.bytecode.opencsv.CSVWriter;
 import com.datastax.driver.core.*;
 import com.datastax.driver.core.policies.DCAwareRoundRobinPolicy;
 import com.datastax.driver.core.policies.DefaultRetryPolicy;
 import com.datastax.driver.core.policies.TokenAwarePolicy;
-import org.apache.commons.codec.binary.Base64;
+import com.kharevich.formatter.*;
+import com.kharevich.formatter.Formatter;
 import org.apache.log4j.Logger;
-import org.json.simple.JSONObject;
 import org.springframework.shell.core.CommandMarker;
 import org.springframework.shell.core.annotation.CliCommand;
 import org.springframework.shell.core.annotation.CliOption;
 import org.springframework.stereotype.Component;
 
 import java.io.*;
-import java.nio.ByteBuffer;
-import java.text.SimpleDateFormat;
 import java.util.*;
 
 /**
@@ -84,7 +83,7 @@ public class ConnectCommand implements CommandMarker {
     }
 
     @CliCommand(value = "export", help = "Queries database and saves output to CSV file")
-    public String export(
+    public String exportToCSV(
             @CliOption(key = {"stmt"}, mandatory = true, help = "CQL query statement") String q,
             @CliOption(key = {"filename"}, mandatory = false, help = "Specify output filename") String filename
     ) {
@@ -95,62 +94,64 @@ public class ConnectCommand implements CommandMarker {
         } else {
             outputPath += "result_" + new Date().getTime() + ".csv";
         }
-        FileWriter fw;
+        Writer fw;
         Long savedCounter = 0l;
         try {
             fw = new FileWriter(outputPath);
-            CSVWriter writer = new CSVWriter(fw, separator);
             log.info("exporting records");
             Statement stmt = new SimpleStatement(q);
-            stmt.setFetchSize(1000);
             ResultSet rs = session.execute(stmt);
             Iterator<Row> iter = rs.iterator();
             int c = 0;
             List<ColumnDefinitions.Definition> columnDefinition = rs.getColumnDefinitions().asList();
+            Formatter formatter = new JSONStreamFormatter(fw, columnDefinition);
             while (iter.hasNext()) {
                 savedCounter++;
                 Row row = iter.next();
-                String[] valuesArray = new String[columnDefinition.size()];
-                int i = 0;
-                for (ColumnDefinitions.Definition key : columnDefinition) {
-                    Object o = row.getObject(key.getName());
-                    String value;
-                    if (o == null) {
-                        value = null;
-                    } else if (key.getType() == DataType.timeuuid()) {
-                        UUID uuid = (UUID) o;
-                        value = uuid.toString();
-                    } else if (key.getType() == DataType.uuid()) {
-                        UUID uuid = (UUID) o;
-                        value = uuid.toString();
-                    } else if (key.getType() == DataType.blob()) {
-                        ByteBuffer buffer = (ByteBuffer) o;
-                        byte[] blobData = buffer.array();
-                        value = Base64.encodeBase64String(blobData);
-                    } else if (key.getType() == DataType.timestamp()) {
-                        SimpleDateFormat fmt = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS");
-                        fmt.setTimeZone(TimeZone.getTimeZone("UTC"));
-                        Date t = row.getTimestamp(key.getName());
-                        value = fmt.format(t);
-                    } else {
-                        value = o.toString();
-                    }
-                    valuesArray[i] = value;
-                    i++;
-                }
-                writer.writeNext(valuesArray);
+                formatter.append(row);
                 if ((c % 1000) == 0) {
                     log.info(" ... exported " + c + " rows");
                 }
                 c++;
             }
             log.info(" -- exported " + c + " records");
-            writer.close();
+            formatter.close();
         } catch (IOException e) {
             StringWriter errors = new StringWriter();
             e.printStackTrace(new PrintWriter(errors));
             return errors.toString();
         }
         return "Success, " + savedCounter + " rows saved to " + outputPath;
+    }
+
+    @CliCommand(value = "import", help = "Queries database and saves output to CSV file")
+    public String importFromCSV(
+            @CliOption(key = {"stmt"}, mandatory = true, help = "CQL query statement") String q,
+            @CliOption(key = {"filename"}, mandatory = true, help = "Specify output filename") String filename
+    ) {
+        String outputPath = directory + File.separator;
+        outputPath += filename;
+        FileReader fr;
+        Long savedCounter = 0l;
+        try {
+            fr = new FileReader(outputPath);
+            CSVReader reader = new CSVReader(fr, separator);
+            log.info("importing records");
+            long c = 0l;
+            while (true) {
+                String[] arrayValues = reader.readNext();
+                if (arrayValues == null) {
+                    break;
+                }
+                c++;
+            }
+            log.info(" -- imported " + c + " records");
+            reader.close();
+        } catch (IOException e) {
+            StringWriter errors = new StringWriter();
+            e.printStackTrace(new PrintWriter(errors));
+            return errors.toString();
+        }
+        return "Success, " + savedCounter + " rows imported from " + outputPath;
     }
 }
