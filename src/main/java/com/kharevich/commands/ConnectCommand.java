@@ -1,20 +1,25 @@
 package com.kharevich.commands;
 
 import au.com.bytecode.opencsv.CSVReader;
-import au.com.bytecode.opencsv.CSVWriter;
 import com.datastax.driver.core.*;
 import com.datastax.driver.core.policies.DCAwareRoundRobinPolicy;
 import com.datastax.driver.core.policies.DefaultRetryPolicy;
 import com.datastax.driver.core.policies.TokenAwarePolicy;
+import com.fasterxml.jackson.core.JsonFactory;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonToken;
+import com.kharevich.commands.parser.JSONStreamParser;
 import com.kharevich.formatter.*;
 import com.kharevich.formatter.Formatter;
 import org.apache.log4j.Logger;
+import org.json.simple.parser.JSONParser;
 import org.springframework.shell.core.CommandMarker;
 import org.springframework.shell.core.annotation.CliCommand;
 import org.springframework.shell.core.annotation.CliOption;
 import org.springframework.stereotype.Component;
 
 import java.io.*;
+import java.text.ParseException;
 import java.util.*;
 
 /**
@@ -85,6 +90,7 @@ public class ConnectCommand implements CommandMarker {
     @CliCommand(value = "export", help = "Queries database and saves output to CSV file")
     public String exportToCSV(
             @CliOption(key = {"stmt"}, mandatory = true, help = "CQL query statement") String q,
+            @CliOption(key = {"table"}, mandatory = false, help = "Table name") String table,
             @CliOption(key = {"filename"}, mandatory = false, help = "Specify output filename") String filename
     ) {
         String outputPath = directory + File.separator;
@@ -126,27 +132,35 @@ public class ConnectCommand implements CommandMarker {
 
     @CliCommand(value = "import", help = "Queries database and saves output to CSV file")
     public String importFromCSV(
-            @CliOption(key = {"stmt"}, mandatory = true, help = "CQL query statement") String q,
+            @CliOption(key = {"stmt"}, mandatory = false, help = "CQL query statement") String q,
             @CliOption(key = {"filename"}, mandatory = true, help = "Specify output filename") String filename
-    ) {
+    ) throws ParseException {
         String outputPath = directory + File.separator;
         outputPath += filename;
         FileReader fr;
         Long savedCounter = 0l;
         try {
             fr = new FileReader(outputPath);
-            CSVReader reader = new CSVReader(fr, separator);
-            log.info("importing records");
-            long c = 0l;
-            while (true) {
-                String[] arrayValues = reader.readNext();
-                if (arrayValues == null) {
-                    break;
+            JSONStreamParser streamParser = new JSONStreamParser(fr);
+            PreparedStatement prepare = session.prepare(streamParser.getCQLInsert());
+            streamParser.jumpToData();
+            BatchStatement statement = new BatchStatement();
+            while(streamParser.hasNextValues()){
+                Object[] array = streamParser.getNextValues();
+                BoundStatement bprep = new BoundStatement(prepare);
+                bprep.bind(array);
+                statement.add(bprep);
+                savedCounter++;
+                if(savedCounter%100==0){
+                    session.execute(statement);
+                    statement = new BatchStatement();
+                    System.out.println(" -- imported " + savedCounter + " records");
                 }
-                c++;
+
             }
-            log.info(" -- imported " + c + " records");
-            reader.close();
+//            }
+            log.info(" -- imported " + savedCounter + " records");
+//            reader.close();
         } catch (IOException e) {
             StringWriter errors = new StringWriter();
             e.printStackTrace(new PrintWriter(errors));
