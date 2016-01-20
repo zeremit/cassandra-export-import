@@ -95,7 +95,9 @@ public class JSONStreamParser implements Parser {
         return jsonParser.nextToken() != JsonToken.END_ARRAY;
     }
 
-    public Object[] getNextValues() throws IOException, ParseException {
+    public synchronized Object[] getNextValues() throws IOException, ParseException {
+        if(!hasNextValues())
+            return null;
         Object[] array = new Object[fields.size()];
                 int i = 0;
                 while (jsonParser.nextToken() != JsonToken.END_OBJECT) {

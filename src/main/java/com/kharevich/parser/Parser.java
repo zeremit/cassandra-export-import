@@ -12,8 +12,6 @@ public interface Parser {
 
     void jumpToData() throws IOException;
 
-    boolean hasNextValues() throws IOException;
-
     Object[] getNextValues() throws IOException, ParseException;
 
 }

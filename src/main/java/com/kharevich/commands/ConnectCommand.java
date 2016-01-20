@@ -101,6 +101,7 @@ public class ConnectCommand implements CommandMarker {
             @CliOption(key = {"filename"}, mandatory = false, help = "Specify output filename") String filename,
             @CliOption(key = {"limit"}, mandatory = false, help = "limit of export rows") Integer limit
     ) {
+        long currentTime = System.currentTimeMillis();
         String outputPath = directory + File.separator;
 
         if (filename != null) {
@@ -142,7 +143,8 @@ public class ConnectCommand implements CommandMarker {
             e.printStackTrace(new PrintWriter(errors));
             return errors.toString();
         }
-        return "Success, " + savedCounter + " rows saved to " + outputPath;
+        long total = System.currentTimeMillis() - currentTime;
+        return "Success, " + savedCounter + " rows saved to " + outputPath + " in " + total + " ms";
     }
 
     @CliCommand(value = "import", help = "Queries database and saves output to CSV file")
@@ -151,6 +153,7 @@ public class ConnectCommand implements CommandMarker {
             @CliOption(key = {"table"}, mandatory = false, help = "keyspace") String table,
             @CliOption(key = {"filename"}, mandatory = true, help = "Specify output filename") String filename
     ) throws ParseException {
+        long currentTime = System.currentTimeMillis();
         String outputPath = directory + File.separator;
         outputPath += filename;
         FileReader fr;
@@ -158,23 +161,10 @@ public class ConnectCommand implements CommandMarker {
         try {
             fr = new FileReader(outputPath);
             JSONStreamParser streamParser = new JSONStreamParser(fr);
-            PreparedStatement prepare = session.prepare(streamParser.getCQLInsert(keyspace, table));
-            streamParser.jumpToData();
-            BatchStatement statement = new BatchStatement();
-            while(streamParser.hasNextValues()){
-                Object[] array = streamParser.getNextValues();
-                BoundStatement bprep = new BoundStatement(prepare);
-                bprep.bind(array);
-                statement.add(bprep);
-                savedCounter++;
-                if(savedCounter%batchSize==0){
-                    session.execute(statement);
-                    statement = new BatchStatement();
-                    System.out.println(" -- imported " + savedCounter + " records");
-                }
+            for(int i = 0; i<10; i++){
 
             }
-            session.execute(statement);
+//            session.execute(statement);
 //            }
             log.info(" -- imported " + savedCounter + " records");
 //            reader.close();
@@ -183,6 +173,7 @@ public class ConnectCommand implements CommandMarker {
             e.printStackTrace(new PrintWriter(errors));
             return errors.toString();
         }
-        return "Success, " + savedCounter + " rows imported from " + outputPath;
+        long total = System.currentTimeMillis() - currentTime;
+        return "Success, " + savedCounter + " rows imported from " + outputPath + " in " + total + " ms";
     }
 }
