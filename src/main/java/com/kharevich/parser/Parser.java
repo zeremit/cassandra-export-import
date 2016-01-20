@@ -1,4 +1,4 @@
-package com.kharevich.commands.parser;
+package com.kharevich.parser;
 
 import java.io.IOException;
 import java.text.ParseException;
@@ -8,7 +8,7 @@ import java.text.ParseException;
  */
 public interface Parser {
 
-    String getCQLInsert() throws IOException;
+    String getCQLInsert(String keyspace, String table) throws IOException;
 
     void jumpToData() throws IOException;
 

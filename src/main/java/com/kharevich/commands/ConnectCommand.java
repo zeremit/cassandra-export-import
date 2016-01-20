@@ -1,18 +1,15 @@
 package com.kharevich.commands;
 
-import au.com.bytecode.opencsv.CSVReader;
 import com.datastax.driver.core.*;
 import com.datastax.driver.core.policies.DCAwareRoundRobinPolicy;
 import com.datastax.driver.core.policies.DefaultRetryPolicy;
 import com.datastax.driver.core.policies.TokenAwarePolicy;
-import com.fasterxml.jackson.core.JsonFactory;
-import com.fasterxml.jackson.core.JsonParser;
-import com.fasterxml.jackson.core.JsonToken;
-import com.kharevich.commands.parser.JSONStreamParser;
+import com.datastax.driver.core.querybuilder.QueryBuilder;
+import com.datastax.driver.core.querybuilder.Select;
+import com.kharevich.parser.JSONStreamParser;
 import com.kharevich.formatter.*;
 import com.kharevich.formatter.Formatter;
 import org.apache.log4j.Logger;
-import org.json.simple.parser.JSONParser;
 import org.springframework.shell.core.CommandMarker;
 import org.springframework.shell.core.annotation.CliCommand;
 import org.springframework.shell.core.annotation.CliOption;
@@ -38,10 +35,15 @@ public class ConnectCommand implements CommandMarker {
 
     private String directory = ".";
 
+    private int fetchSize = 10000;
+
+    private int batchSize = 100;
+
     @CliCommand(value = "set", help = "Sets custom properties")
     public String set(
             @CliOption(key = {"separator"}, mandatory = false, help = "CSV separator, default: ';'") String separator,
-            @CliOption(key = {"directory"}, mandatory = false, help = "Output directory, default: './'") String directory
+            @CliOption(key = {"directory"}, mandatory = false, help = "Output directory, default: './'") String directory,
+            @CliOption(key = {"batch"}, mandatory = false, help = "batch size for insert operation") Integer batch
     ) {
 
         if (separator != null) {
@@ -52,11 +54,16 @@ public class ConnectCommand implements CommandMarker {
             this.directory = directory;
         }
 
+        if(batch !=null){
+            this.batchSize = batch;
+        }
+
         return showVariables();
     }
 
     private String showVariables() {
         return "separator = " + separator + "\n" +
+                "batch = " + batchSize + "\n" +
                 "directory = " + directory;
     }
 
@@ -89,33 +96,41 @@ public class ConnectCommand implements CommandMarker {
 
     @CliCommand(value = "export", help = "Queries database and saves output to CSV file")
     public String exportToCSV(
-            @CliOption(key = {"stmt"}, mandatory = true, help = "CQL query statement") String q,
-            @CliOption(key = {"table"}, mandatory = false, help = "Table name") String table,
-            @CliOption(key = {"filename"}, mandatory = false, help = "Specify output filename") String filename
+            @CliOption(key = {"keyspace"}, mandatory = true, help = "Keyspace name") String keyspace,
+            @CliOption(key = {"table"}, mandatory = true, help = "Table name") String table,
+            @CliOption(key = {"filename"}, mandatory = false, help = "Specify output filename") String filename,
+            @CliOption(key = {"limit"}, mandatory = false, help = "limit of export rows") Integer limit
     ) {
         String outputPath = directory + File.separator;
 
         if (filename != null) {
             outputPath += filename;
         } else {
-            outputPath += "result_" + new Date().getTime() + ".csv";
+            outputPath += "result_" + new Date().getTime() + ".json";
         }
+        Metadata metadata = session.getCluster().getMetadata();
+        String initTable = metadata.getKeyspace(keyspace).getTable(table).asCQLQuery();
+        System.out.println(initTable);
         Writer fw;
         Long savedCounter = 0l;
+        Select selectStatement = QueryBuilder.select().all().from(keyspace, table);
+        if(limit != null){
+            selectStatement.limit(limit);
+        }
         try {
             fw = new FileWriter(outputPath);
             log.info("exporting records");
-            Statement stmt = new SimpleStatement(q);
-            ResultSet rs = session.execute(stmt);
-            Iterator<Row> iter = rs.iterator();
+            selectStatement.setFetchSize(fetchSize);
+            ResultSet rs = session.execute(selectStatement);
+            Iterator<Row> iterator = rs.iterator();
             int c = 0;
             List<ColumnDefinitions.Definition> columnDefinition = rs.getColumnDefinitions().asList();
             Formatter formatter = new JSONStreamFormatter(fw, columnDefinition);
-            while (iter.hasNext()) {
+            while (iterator.hasNext()) {
                 savedCounter++;
-                Row row = iter.next();
+                Row row = iterator.next();
                 formatter.append(row);
-                if ((c % 1000) == 0) {
+                if ((c % fetchSize) == 0) {
                     log.info(" ... exported " + c + " rows");
                 }
                 c++;
@@ -132,7 +147,8 @@ public class ConnectCommand implements CommandMarker {
 
     @CliCommand(value = "import", help = "Queries database and saves output to CSV file")
     public String importFromCSV(
-            @CliOption(key = {"stmt"}, mandatory = false, help = "CQL query statement") String q,
+            @CliOption(key = {"keyspace"}, mandatory = false, help = "keyspace") String keyspace,
+            @CliOption(key = {"table"}, mandatory = false, help = "keyspace") String table,
             @CliOption(key = {"filename"}, mandatory = true, help = "Specify output filename") String filename
     ) throws ParseException {
         String outputPath = directory + File.separator;
@@ -142,7 +158,7 @@ public class ConnectCommand implements CommandMarker {
         try {
             fr = new FileReader(outputPath);
             JSONStreamParser streamParser = new JSONStreamParser(fr);
-            PreparedStatement prepare = session.prepare(streamParser.getCQLInsert());
+            PreparedStatement prepare = session.prepare(streamParser.getCQLInsert(keyspace, table));
             streamParser.jumpToData();
             BatchStatement statement = new BatchStatement();
             while(streamParser.hasNextValues()){
@@ -151,13 +167,14 @@ public class ConnectCommand implements CommandMarker {
                 bprep.bind(array);
                 statement.add(bprep);
                 savedCounter++;
-                if(savedCounter%100==0){
+                if(savedCounter%batchSize==0){
                     session.execute(statement);
                     statement = new BatchStatement();
                     System.out.println(" -- imported " + savedCounter + " records");
                 }
 
             }
+            session.execute(statement);
 //            }
             log.info(" -- imported " + savedCounter + " records");
 //            reader.close();

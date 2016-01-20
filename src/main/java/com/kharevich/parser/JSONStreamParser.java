@@ -1,4 +1,4 @@
-package com.kharevich.commands.parser;
+package com.kharevich.parser;
 
 import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonParser;
@@ -27,16 +27,20 @@ public class JSONStreamParser implements Parser {
         if (jsonParser.nextToken() != JsonToken.START_OBJECT) {
             throw new IOException("Expected data to start with an Object");
         }
-    }
-
-
-    public String getCQLInsert() throws IOException {
-        this.fields = Maps.newLinkedHashMap();
+        fields = Maps.newLinkedHashMap();
+        getTableFields();
         while (jsonParser.nextToken() != JsonToken.END_OBJECT) {
             String fieldName = jsonParser.getCurrentName();
-            // Let's move to value
-            // jsonParser.nextToken();
-            if (fieldName != null) {
+            if ("data".equals(fieldName)) {
+                jsonParser.nextToken();
+                break;
+            }
+        }
+    }
+
+    private void getTableFields() throws IOException {
+        while (jsonParser.nextToken() != JsonToken.END_OBJECT) {
+            String fieldName = jsonParser.getCurrentName();
                 if ("columns".equals(fieldName)) {
                     while (jsonParser.nextToken() != JsonToken.END_ARRAY) {
                         String name = null, type = null;
@@ -51,12 +55,16 @@ public class JSONStreamParser implements Parser {
                         }
                         fields.put(name, type);
                     }
+                    break;
                 }
-            }
+
         }
+    }
+
+
+    public String getCQLInsert(String keyspace, String table) throws IOException {
         StringBuilder sb = new StringBuilder();
-        sb.append("INSERT INTO ");
-        sb.append("java_load_5.user");
+        sb.append("INSERT INTO ").append(keyspace).append(".").append(table);
         sb.append(" (");
         int i = 0;
         for (Iterator it = fields.keySet().iterator(); it.hasNext(); ) {
@@ -80,12 +88,7 @@ public class JSONStreamParser implements Parser {
     }
 
     public void jumpToData() throws IOException {
-        while (jsonParser.nextToken() != JsonToken.END_OBJECT) {
-            String fieldName = jsonParser.getCurrentName();
-            if ("data".equals(fieldName)) {
-                break;
-            }
-        }
+
     }
 
     public boolean hasNextValues() throws IOException {
@@ -94,8 +97,6 @@ public class JSONStreamParser implements Parser {
 
     public Object[] getNextValues() throws IOException, ParseException {
         Object[] array = new Object[fields.size()];
-//        while (jsonParser.nextToken() != JsonToken.END_ARRAY) {
-//            if (jsonParser.getCurrentToken() == JsonToken.START_OBJECT) {
                 int i = 0;
                 while (jsonParser.nextToken() != JsonToken.END_OBJECT) {
                     if (jsonParser.getCurrentToken() == JsonToken.FIELD_NAME) {
